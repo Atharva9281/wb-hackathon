@@ -18,6 +18,7 @@ Agent key mapping:
 """
 import asyncio
 import json
+import logging
 import os
 import time
 from pathlib import Path
@@ -31,6 +32,13 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 load_dotenv(Path(__file__).resolve().parents[1] / ".env")
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    datefmt="%H:%M:%S",
+)
+log = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # App
@@ -50,6 +58,14 @@ app.add_middleware(
 @app.on_event("startup")
 async def _startup() -> None:
     weave.init("query-optimizer-api")
+    log.info("=== Query Optimizer API started ===")
+    csv_exists = Path(_CSV_PATH).exists()
+    csv_size = Path(_CSV_PATH).stat().st_size // 1024 if csv_exists else 0
+    log.info("CSV path : %s", _CSV_PATH)
+    log.info("CSV found: %s (%d KB)", csv_exists, csv_size)
+    log.info("Max rows : %d", _MAX_ROWS)
+    if not csv_exists:
+        log.error("CSV NOT FOUND — all executor queries will fail!")
 
 
 # ---------------------------------------------------------------------------
@@ -105,6 +121,7 @@ async def query_endpoint(req: QueryRequest) -> StreamingResponse:
 async def _stream(question: str, mode: str) -> AsyncGenerator[str, None]:
     loop = asyncio.get_event_loop()
     optimization_goal = _MODE_TO_GOAL.get(mode, "balanced")
+    log.info(">>> Request  mode=%s  goal=%s  question=%r", mode, optimization_goal, question[:80])
 
     # Lazy imports keep module-load time fast
     from planner_agent.agent import planner_node, optimizer_node, PlannerState
@@ -124,6 +141,7 @@ async def _stream(question: str, mode: str) -> AsyncGenerator[str, None]:
 
     try:
         # ── 1. PLANNER ───────────────────────────────────────────────────────
+        log.info("[planner] starting")
         yield _sse({"type": "agent_started", "agent": "planner"})
         t0 = time.time()
 
@@ -131,15 +149,18 @@ async def _stream(question: str, mode: str) -> AsyncGenerator[str, None]:
         state.update(result)
 
         plan_tokens = _estimate_tokens(state["logical_plan"])
+        latency = round(time.time() - t0, 2)
+        log.info("[planner] done  tokens=%d  latency=%ss", plan_tokens, latency)
         yield _sse({
             "type": "agent_completed",
             "agent": "planner",
             "tokens": plan_tokens,
             "cost": round(plan_tokens / 1_000_000 * 2.0, 4),
-            "latency": round(time.time() - t0, 2),
+            "latency": latency,
         })
 
         # ── 2. OPTIMIZER ─────────────────────────────────────────────────────
+        log.info("[optimizer] starting")
         yield _sse({"type": "agent_started", "agent": "sqlA"})
         t0 = time.time()
 
@@ -147,17 +168,22 @@ async def _stream(question: str, mode: str) -> AsyncGenerator[str, None]:
         state.update(result)
 
         physical_plan = state["physical_plan"]
+        latency = round(time.time() - t0, 2)
+        log.info("[optimizer] done  plan=%s  cost=$%.4f  latency=%ss",
+                 physical_plan.plan_name if physical_plan else "none",
+                 physical_plan.estimated_cost_usd if physical_plan else 0, latency)
         yield _sse({
             "type": "agent_completed",
             "agent": "sqlA",
             "tokens": 0,
             "cost": physical_plan.estimated_cost_usd if physical_plan else 0,
-            "latency": round(time.time() - t0, 2),
+            "latency": latency,
         })
 
         # ── 3. EXECUTOR ──────────────────────────────────────────────────────
         exec_result: Optional[dict] = None
         if mode != "A":
+            log.info("[executor] starting  csv=%s", _CSV_PATH)
             yield _sse({"type": "agent_started", "agent": "sqlB"})
             t0 = time.time()
             try:
@@ -173,17 +199,20 @@ async def _stream(question: str, mode: str) -> AsyncGenerator[str, None]:
                     None, lambda: run_executor(**inputs)
                 )
                 state["execution_result"] = exec_result
+                log.info("[executor] done  rows_filtered=%s",
+                         (exec_result or {}).get("filter_stats", {}).get("rows_returned", "?"))
             except Exception as exc:
-                # executor failure is non-fatal — report cost as 0
+                log.error("[executor] FAILED: %s", exc, exc_info=True)
                 exec_result = None
 
             fs = (exec_result or {}).get("filter_stats") or {}
+            latency = round(time.time() - t0, 2)
             yield _sse({
                 "type": "agent_completed",
                 "agent": "sqlB",
                 "tokens": (fs.get("tokens_in") or 0) + (fs.get("tokens_out") or 0),
                 "cost": fs.get("cost_usd") or 0,
-                "latency": round(time.time() - t0, 2),
+                "latency": latency,
             })
 
         # ── 4. REDUCER (joiner → executive report) ───────────────────────────
@@ -207,12 +236,14 @@ async def _stream(question: str, mode: str) -> AsyncGenerator[str, None]:
         })
 
         # ── 5. FINAL ANSWER ──────────────────────────────────────────────────
+        log.info("<<< Done  mode=%s", mode)
         yield _sse({
             "type": "final_answer",
             "text": _build_answer(question, mode, state),
         })
 
     except Exception as exc:
+        log.error("[pipeline] UNHANDLED ERROR: %s", exc, exc_info=True)
         yield _sse({"type": "error", "message": str(exc)})
 
 
