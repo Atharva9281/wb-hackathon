@@ -29,6 +29,7 @@ def physical_plan_to_executor_inputs(
     physical_plan: PhysicalPlan,
     source_registry: Optional[Dict[str, str]] = None,
     optimization_goal: str = "balanced",
+    max_rows: Optional[int] = None,
 ) -> dict:
     """
     Returns a dict that can be unpacked directly into run_executor(**inputs).
@@ -85,4 +86,5 @@ def physical_plan_to_executor_inputs(
         mode=_GOAL_TO_MODE.get(optimization_goal, "B"),
         model_input_price=ref_physical.model.input_cost_per_m,
         model_output_price=ref_physical.model.output_cost_per_m,
+        max_rows=max_rows,
     )

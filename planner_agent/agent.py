@@ -147,6 +147,7 @@ class PlannerState(TypedDict):
     dataset_stats: Dict[str, Any]
     optimization_goal: str
     source_registry: Optional[Dict[str, str]]   # None → skip execution
+    max_rows: Optional[int]                      # cap CSV rows for testing
     logical_plan: Optional[LogicalPlan]
     physical_plan: Optional[PhysicalPlan]
     execution_result: Optional[dict]
@@ -197,6 +198,7 @@ def executor_node(state: PlannerState) -> dict:
         state["physical_plan"],
         state["source_registry"],
         state["optimization_goal"],
+        state.get("max_rows"),
     )
     result = run_executor(**inputs)
     return {"execution_result": result}
@@ -237,12 +239,14 @@ def run_planner(
     dataset_stats: Optional[Dict[str, Any]] = None,
     optimization_goal: Literal["cost", "latency", "balanced"] = "balanced",
     source_registry: Optional[Dict[str, str]] = None,
+    max_rows: Optional[int] = None,
 ) -> PlanningResult:
     result = optimizer_demo_graph.invoke({
         "user_query": user_query,
         "dataset_stats": dataset_stats or DEFAULT_DATASET_STATS,
         "optimization_goal": optimization_goal,
         "source_registry": source_registry,
+        "max_rows": max_rows,
         "logical_plan": None,
         "physical_plan": None,
         "execution_result": None,

@@ -29,6 +29,7 @@ class ExecutorState(TypedDict):
     mode: str              # "A", "B", or "C" — decided upstream
     model_input_price: float
     model_output_price: float
+    max_rows: Optional[int]  # cap rows loaded from CSV; None = load all
     # ── Intermediate results (filled by each node) ──
     filtered_df: Optional[Any]       # pandas DataFrame
     filter_stats: Optional[dict]
@@ -151,7 +152,13 @@ async def _process_chunk(async_client, model_id, filter_instruction, chunk_df):
 # and writes filtered_df + filter_stats back into state.
 @weave.op()
 def filter_node(state: ExecutorState) -> dict:
-    complaints_df = pd.read_csv(state["csv_path"])
+    max_rows = state.get("max_rows")
+    print(
+        f"\n[executor] FILTER  — loading {state['csv_path']}"
+        + (f"  (limit: {max_rows} rows)" if max_rows else ""),
+        flush=True,
+    )
+    complaints_df = pd.read_csv(state["csv_path"], nrows=max_rows)
 
     model_id = state["model_id"]
     mode = state["mode"]
@@ -197,12 +204,14 @@ def filter_node(state: ExecutorState) -> dict:
     if mode == "B":
         client = _get_client()
         keep_indices = []
+        processed = 0
 
         for batch_start in range(0, rows_in, 20):
             batch = complaints_df.iloc[batch_start : batch_start + 20]
             for idx, row in batch.iterrows():
                 narrative = row["Consumer complaint narrative"]
                 if pd.isna(narrative) or str(narrative).strip() == "":
+                    processed += 1
                     continue
                 match, usage = _classify_sync(
                     client, model_id, filter_instruction, str(narrative)
@@ -211,6 +220,14 @@ def filter_node(state: ExecutorState) -> dict:
                 tokens_out_total += usage.completion_tokens
                 if match:
                     keep_indices.append(idx)
+                processed += 1
+                print(
+                    f"  [filter] {processed}/{rows_in} rows "
+                    f"({len(keep_indices)} matched)",
+                    end="\r",
+                    flush=True,
+                )
+        print()  # newline after the \r progress line
 
     # ── Mode C: 4 concurrent chunks via asyncio ────────────────────────────────
     elif mode == "C":
@@ -220,6 +237,7 @@ def filter_node(state: ExecutorState) -> dict:
             complaints_df.iloc[i : i + chunk_size]
             for i in range(0, rows_in, chunk_size)
         ]
+        print(f"  [filter] running {len(chunks)} parallel chunks of ~{chunk_size} rows each...", flush=True)
 
         async def _run_all():
             tasks = [
@@ -235,6 +253,7 @@ def filter_node(state: ExecutorState) -> dict:
                 tokens_out_total += usage.completion_tokens
                 if match:
                     keep_indices.append(idx)
+        print(f"  [filter] done — {len(keep_indices)}/{rows_in} rows matched", flush=True)
 
     filtered = (
         complaints_df.loc[keep_indices]
@@ -269,6 +288,7 @@ def filter_node(state: ExecutorState) -> dict:
 # back into state.
 @weave.op()
 def aggregator_node(state: ExecutorState) -> dict:
+    print(f"\n[executor] AGGREGATE — summarising {len(state['filtered_df'])} matched rows", flush=True)
     model_id = state["model_id"]
     filtered_df = state["filtered_df"]
     aggregation_instruction = state["aggregation_instruction"]
@@ -352,6 +372,7 @@ def aggregator_node(state: ExecutorState) -> dict:
 # joiner_stats back into state.
 @weave.op()
 def joiner_node(state: ExecutorState) -> dict:
+    print(f"\n[executor] JOIN    — generating executive report", flush=True)
     model_id = state["model_id"]
     filtered_df = state["filtered_df"]
     aggregation_result = state["aggregation_result"]
@@ -455,6 +476,7 @@ def run_executor(
     mode: str,
     model_input_price: float,
     model_output_price: float,
+    max_rows: Optional[int] = None,
 ) -> dict:
     return executor_graph.invoke(
         {
@@ -465,6 +487,7 @@ def run_executor(
             "mode": mode,
             "model_input_price": model_input_price,
             "model_output_price": model_output_price,
+            "max_rows": max_rows,
             "filtered_df": None,
             "filter_stats": None,
             "aggregation_result": None,

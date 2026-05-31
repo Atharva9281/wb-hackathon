@@ -8,9 +8,12 @@ End-to-end runner:
 Usage:
     python run.py
     python run.py "your custom query here"
+    python run.py "your query" --limit 100
 """
 import sys
+import argparse
 from pathlib import Path
+from typing import Optional
 
 import weave
 from dotenv import load_dotenv
@@ -19,7 +22,7 @@ load_dotenv(Path(__file__).parent / ".env")
 weave.init("query-optimizer-demo")
 
 from planner_agent import run_planner
-from utils import print_logical_plan, print_physical_plan
+from utils import print_logical_plan, print_physical_plan, print_optimizer_comparison
 
 CSV_PATH = str(Path(__file__).parent / "backend" / "complaints_clean.csv")
 
@@ -35,17 +38,27 @@ DEFAULT_QUERY = (
 )
 
 
-def main(query: str) -> None:
-    print(f"\nQuery: {query}\n")
+def main(query: str, max_rows: Optional[int] = None) -> None:
+    print(f"\nQuery: {query}")
+    if max_rows:
+        print(f"Row limit: {max_rows}")
+    print()
 
     result = run_planner(
         user_query=query,
         dataset_stats=DATASET_STATS,
         optimization_goal="balanced",
         source_registry=SOURCE_REGISTRY,
+        max_rows=max_rows,
     )
 
     print_logical_plan(result["logical_plan"])
+    print_optimizer_comparison(
+        result["logical_plan"],
+        DATASET_STATS,
+        optimization_goal="balanced",
+        selected_plan=result["physical_plan"],
+    )
     print_physical_plan(result["physical_plan"])
 
     exec_result = result["execution_result"]
@@ -90,5 +103,11 @@ def main(query: str) -> None:
 
 
 if __name__ == "__main__":
-    query = " ".join(sys.argv[1:]) if len(sys.argv) > 1 else DEFAULT_QUERY
-    main(query)
+    parser = argparse.ArgumentParser()
+    parser.add_argument("query", nargs="*", help="Natural language query")
+    parser.add_argument("--limit", type=int, default=None, metavar="N",
+                        help="Cap CSV rows loaded (useful for large files)")
+    args = parser.parse_args()
+
+    query = " ".join(args.query) if args.query else DEFAULT_QUERY
+    main(query, max_rows=args.limit)

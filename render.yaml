@@ -1,0 +1,13 @@
+services:
+  - type: web
+    name: wnb-hack-api
+    runtime: python
+    rootDir: .
+    buildCommand: pip install -r api/requirements.txt
+    startCommand: uvicorn api.main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: WANDB_API_KEY
+        sync: false   # set this in the Render dashboard
+      - key: WANDB_MODEL
+        value: deepseek-ai/DeepSeek-V3.1
+    healthCheckPath: /health
