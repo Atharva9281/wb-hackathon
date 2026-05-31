@@ -95,7 +95,7 @@ export async function runQuery(question: string, goalOrMode?: Goal | Mode) {
   // Try real SSE first
   try {
     const ctrl = new AbortController();
-    const timeout = setTimeout(() => ctrl.abort(), 1500);
+    const timeout = setTimeout(() => ctrl.abort(), 60000);
     const resp = await fetch(`${API_URL}/query`, {
       method: "POST",
       headers: { "Content-Type": "application/json", Accept: "text/event-stream" },

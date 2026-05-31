@@ -4,3 +4,4 @@ __pycache__/
 *.pyc
 .claude/
 *.csv
+!backend/complaints_clean.csv
