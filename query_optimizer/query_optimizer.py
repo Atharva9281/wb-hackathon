@@ -1,7 +1,7 @@
 import os
 from pydantic import BaseModel, Field
 from typing import List, Literal, Dict, Any, Tuple
-from planner_agent import PlanNode, LogicalPlan
+from planner_agent.models import PlanNode, LogicalPlan
 
 
 # --- Define Physical Execution Profiles ---
@@ -58,6 +58,8 @@ class CostBasedOptimizer:
         self.dataset_stats = dataset_stats  # e.g., {"total_docs": 1000, "avg_tokens_per_doc": 1500}
         self.optimization_goal = optimization_goal
 
+        # Dictionary of models that describe the costs associated with each model and categorize them into 
+        # different categories.
         self.models = {
             "cheap_flash": ModelProfile(
                 model_name="meta-llama/Llama-3.1-8B-Instruct",

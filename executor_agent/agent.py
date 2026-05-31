@@ -14,8 +14,6 @@ from langgraph.graph import StateGraph, START, END
 
 load_dotenv(Path(__file__).resolve().parents[1] / ".env")
 
-weave.init("wb-hackathon")
-
 _WB_BASE_URL = "https://api.inference.wandb.ai/v1"
 
 
@@ -478,6 +476,7 @@ def run_executor(
 
 
 if __name__ == "__main__":
+    weave.init("wb-hackathon")
     _csv = str(Path(__file__).resolve().parents[1] / "backend" / "complaints_clean.csv")
 
     result = run_executor(

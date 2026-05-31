@@ -5,7 +5,7 @@ These tests hit the real W&B inference endpoint and require WANDB_API_KEY
 to be set (loaded from the project-root .env file).
 
 Run with:
-    pytest tests/test_integration.py -v
+    pytest tests/test_integration.py -v -s
 """
 from pathlib import Path
 from typing import Set
@@ -17,8 +17,8 @@ from dotenv import load_dotenv
 load_dotenv(Path(__file__).resolve().parents[1] / ".env")
 weave.init("query-optimizer-tests")
 
-from planner_agent import run_planner, LogicalPlan
-from query_optimizer import CostBasedOptimizer, PhysicalPlan
+from planner_agent import run_planner, LogicalPlan, PlanningResult
+from query_optimizer import PhysicalPlan
 from utils import print_logical_plan, print_physical_plan
 
 DATASET_STATS = {"total_docs": 1000, "avg_tokens_per_doc": 1500}
@@ -58,30 +58,23 @@ class TestLinearPipeline:
 
     def test_refund_query_produces_valid_physical_plan(self):
         query = "Find all cities where customers asked for a refund."
-        logical_plan = run_planner(query)
-        print_logical_plan(logical_plan)
+        result: PlanningResult = run_planner(query, DATASET_STATS)
+        print_logical_plan(result["logical_plan"])
+        print_physical_plan(result["physical_plan"])
 
-        assert logical_plan is not None
-        assert len(logical_plan.nodes) >= 2
-
-        optimizer = CostBasedOptimizer(DATASET_STATS, optimization_goal="balanced")
-        physical_plan = optimizer.evaluate_and_select(logical_plan)
-        print_physical_plan(physical_plan)
-
-        _assert_valid_physical_plan(physical_plan)
-        _assert_topological_order(logical_plan, physical_plan)
+        assert result["logical_plan"] is not None
+        assert len(result["logical_plan"].nodes) >= 2
+        _assert_valid_physical_plan(result["physical_plan"])
+        _assert_topological_order(result["logical_plan"], result["physical_plan"])
 
     def test_churn_summary_query(self):
         query = "Summarize the top complaints from customers who churned last month."
-        logical_plan = run_planner(query)
-        print_logical_plan(logical_plan)
+        result: PlanningResult = run_planner(query, DATASET_STATS)
+        print_logical_plan(result["logical_plan"])
+        print_physical_plan(result["physical_plan"])
 
-        optimizer = CostBasedOptimizer(DATASET_STATS, optimization_goal="balanced")
-        physical_plan = optimizer.evaluate_and_select(logical_plan)
-        print_physical_plan(physical_plan)
-
-        _assert_valid_physical_plan(physical_plan)
-        _assert_topological_order(logical_plan, physical_plan)
+        _assert_valid_physical_plan(result["physical_plan"])
+        _assert_topological_order(result["logical_plan"], result["physical_plan"])
 
 
 class TestJoinPipeline:
@@ -92,45 +85,45 @@ class TestJoinPipeline:
             "Find customers who are churning due to bugs "
             "and look up their contract value from the CRM."
         )
-        logical_plan = run_planner(query)
-        print_logical_plan(logical_plan)
+        result: PlanningResult = run_planner(query, DATASET_STATS)
+        print_logical_plan(result["logical_plan"])
+        print_physical_plan(result["physical_plan"])
 
-        # A JOIN query should have at least two root SCAN nodes plus downstream ops
-        assert len(logical_plan.nodes) >= 3
-
-        optimizer = CostBasedOptimizer(DATASET_STATS, optimization_goal="balanced")
-        physical_plan = optimizer.evaluate_and_select(logical_plan)
-        print_physical_plan(physical_plan)
-
-        _assert_valid_physical_plan(physical_plan)
-        _assert_topological_order(logical_plan, physical_plan)
+        assert len(result["logical_plan"].nodes) >= 3
+        _assert_valid_physical_plan(result["physical_plan"])
+        _assert_topological_order(result["logical_plan"], result["physical_plan"])
 
 
 class TestOptimizationGoals:
     """The chosen goal should affect the selected plan's cost/latency trade-off."""
 
     @pytest.fixture(scope="class")
-    def logical_plan(self):
-        return run_planner("Find all customers who complained about billing errors.")
+    def planning_result(self):
+        return run_planner(
+            "Find all customers who complained about billing errors.",
+            DATASET_STATS,
+        )
 
-    def test_cost_goal_is_cheaper_than_latency_goal(self, logical_plan):
-        cost_plan = CostBasedOptimizer(DATASET_STATS, "cost").evaluate_and_select(logical_plan)
-        latency_plan = CostBasedOptimizer(DATASET_STATS, "latency").evaluate_and_select(logical_plan)
+    def test_cost_goal_is_cheaper_than_latency_goal(self, planning_result):
+        logical_plan = planning_result["logical_plan"]
+        cost_result = run_planner(logical_plan.plan_id, DATASET_STATS, optimization_goal="cost")
+        latency_result = run_planner(logical_plan.plan_id, DATASET_STATS, optimization_goal="latency")
+        assert cost_result["physical_plan"].estimated_cost_usd <= latency_result["physical_plan"].estimated_cost_usd
 
-        # Cost-optimized plan should have lower or equal USD cost
-        assert cost_plan.estimated_cost_usd <= latency_plan.estimated_cost_usd
+    def test_latency_goal_is_faster_than_cost_goal(self, planning_result):
+        logical_plan = planning_result["logical_plan"]
+        cost_result = run_planner(logical_plan.plan_id, DATASET_STATS, optimization_goal="cost")
+        latency_result = run_planner(logical_plan.plan_id, DATASET_STATS, optimization_goal="latency")
+        assert latency_result["physical_plan"].estimated_latency_sec <= cost_result["physical_plan"].estimated_latency_sec
 
-    def test_latency_goal_is_faster_than_cost_goal(self, logical_plan):
-        cost_plan = CostBasedOptimizer(DATASET_STATS, "cost").evaluate_and_select(logical_plan)
-        latency_plan = CostBasedOptimizer(DATASET_STATS, "latency").evaluate_and_select(logical_plan)
-
-        # Latency-optimized plan should have lower or equal latency
-        assert latency_plan.estimated_latency_sec <= cost_plan.estimated_latency_sec
-
-    def test_all_goals_produce_valid_plans(self, logical_plan):
-        print_logical_plan(logical_plan)
+    def test_all_goals_produce_valid_plans(self, planning_result):
+        print_logical_plan(planning_result["logical_plan"])
         for goal in ("cost", "latency", "balanced"):
-            plan = CostBasedOptimizer(DATASET_STATS, goal).evaluate_and_select(logical_plan)
-            print_physical_plan(plan)
-            _assert_valid_physical_plan(plan)
-            _assert_topological_order(logical_plan, plan)
+            result = run_planner(
+                "Find all customers who complained about billing errors.",
+                DATASET_STATS,
+                optimization_goal=goal,
+            )
+            print_physical_plan(result["physical_plan"])
+            _assert_valid_physical_plan(result["physical_plan"])
+            _assert_topological_order(result["logical_plan"], result["physical_plan"])

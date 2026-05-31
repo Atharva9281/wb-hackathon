@@ -14,7 +14,6 @@ class PlanNode(BaseModel):
         description="List of node_ids that must complete first",
     )
 
-
 class LogicalPlan(BaseModel):
     plan_id: str
     nodes: List[PlanNode]

@@ -1,6 +1,6 @@
 import os
 from pathlib import Path
-from typing import TypedDict, Optional
+from typing import TypedDict, Optional, Dict, Any, Literal
 
 from dotenv import load_dotenv
 import weave
@@ -11,6 +11,11 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from langgraph.graph import StateGraph, START, END
 
 from .models import LogicalPlan
+from .executor_bridge import physical_plan_to_executor_inputs
+from query_optimizer.query_optimizer import CostBasedOptimizer, PhysicalPlan
+from executor_agent.agent import run_executor
+
+DEFAULT_DATASET_STATS = {"total_docs": 1000, "avg_tokens_per_doc": 1500}
 
 SYSTEM_PROMPT ='''
 GOAL:
@@ -136,11 +141,21 @@ Expacted output:
 
 '''
 
-# This class contains the overall state of the optimizer. It acts as a global dict between
-# multiple agents where each agent is doing its own task. 
+# Shared state dict passed between all nodes in the graph.
 class PlannerState(TypedDict):
     user_query: str
+    dataset_stats: Dict[str, Any]
+    optimization_goal: str
+    source_registry: Optional[Dict[str, str]]   # None → skip execution
     logical_plan: Optional[LogicalPlan]
+    physical_plan: Optional[PhysicalPlan]
+    execution_result: Optional[dict]
+
+
+class PlanningResult(TypedDict):
+    logical_plan: LogicalPlan
+    physical_plan: PhysicalPlan
+    execution_result: Optional[dict]    # None when no source_registry supplied
 
 
 # This creates the LLM client.
@@ -165,14 +180,50 @@ def planner_node(state: PlannerState) -> dict:
     return {"logical_plan": plan}
 
 
+@weave.op()
+def optimizer_node(state: PlannerState) -> dict:
+    optimizer = CostBasedOptimizer(
+        dataset_stats=state["dataset_stats"],
+        optimization_goal=state["optimization_goal"],
+    )
+    physical_plan = optimizer.evaluate_and_select(state["logical_plan"])
+    return {"physical_plan": physical_plan}
+
+
+@weave.op()
+def executor_node(state: PlannerState) -> dict:
+    inputs = physical_plan_to_executor_inputs(
+        state["logical_plan"],
+        state["physical_plan"],
+        state["source_registry"],
+        state["optimization_goal"],
+    )
+    result = run_executor(**inputs)
+    return {"execution_result": result}
+
+
+def _route_after_optimizer(state: PlannerState) -> str:
+    """Run the executor only when a source_registry was supplied."""
+    registry = state.get("source_registry") or {}
+    return "executor" if registry else END
+
+
 # This will create the base graph for the multi-agent orchestration framework.
 def build_graph() -> StateGraph:
     builder = StateGraph(PlannerState)
 
-    # This builds the simple graph START->LOGICAL_QUERY_PLANNER->END
+    # START -> logical-query-planner -> query-optimizer -> (executor)? -> END
     builder.add_node("logical-query-planner", planner_node)
+    builder.add_node("query-optimizer", optimizer_node)
+    builder.add_node("executor", executor_node)
     builder.add_edge(START, "logical-query-planner")
-    builder.add_edge("logical-query-planner", END)
+    builder.add_edge("logical-query-planner", "query-optimizer")
+    builder.add_conditional_edges(
+        "query-optimizer",
+        _route_after_optimizer,
+        {"executor": "executor", END: END},
+    )
+    builder.add_edge("executor", END)
     return builder.compile()
 
 
@@ -181,21 +232,50 @@ optimizer_demo_graph = build_graph()
 
 # 
 @weave.op()
-def run_planner(user_query: str) -> LogicalPlan:
-    result = optimizer_demo_graph.invoke({"user_query": user_query, "logical_plan": None})
-    return result["logical_plan"]
+def run_planner(
+    user_query: str,
+    dataset_stats: Optional[Dict[str, Any]] = None,
+    optimization_goal: Literal["cost", "latency", "balanced"] = "balanced",
+    source_registry: Optional[Dict[str, str]] = None,
+) -> PlanningResult:
+    result = optimizer_demo_graph.invoke({
+        "user_query": user_query,
+        "dataset_stats": dataset_stats or DEFAULT_DATASET_STATS,
+        "optimization_goal": optimization_goal,
+        "source_registry": source_registry,
+        "logical_plan": None,
+        "physical_plan": None,
+        "execution_result": None,
+    })
+    return PlanningResult(
+        logical_plan=result["logical_plan"],
+        physical_plan=result["physical_plan"],
+        execution_result=result.get("execution_result"),
+    )
 
 
 if __name__ == "__main__":
+    import sys
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    from utils import print_logical_plan, print_physical_plan
+
     weave.init("query-optimizer-demo")
 
     query = "Find all the cities where customers want a refund."
-    plan = run_planner(query)
 
-    print(f"Plan ID : {plan.plan_id}")
-    print(f"Nodes   : {len(plan.nodes)}")
-    print(plan)
-    for node in plan.nodes:
-        deps = f" (depends on: {node.depends_on})" if node.depends_on else ""
-        src = f" [{node.target_source}]" if node.target_source else ""
-        print(f"  {node.node_id}  {node.operation}{src}: {node.instruction}{deps}")
+    # Pass a source_registry to also run the executor.
+    # Remove / set to None to skip execution and only plan + optimise.
+    registry = {
+        "transcripts": str(Path(__file__).resolve().parents[1] / "backend" / "complaints_clean.csv")
+    }
+
+    result = run_planner(query, source_registry=registry)
+
+    print_logical_plan(result["logical_plan"])
+    print_physical_plan(result["physical_plan"])
+
+    if result["execution_result"]:
+        print("\n=== Execution Result ===")
+        print("Filter stats :", result["execution_result"].get("filter_stats"))
+        print("Aggregation  :", result["execution_result"].get("aggregation_result"))
+        print("Final report :", result["execution_result"].get("joined_result"))
