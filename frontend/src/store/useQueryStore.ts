@@ -64,61 +64,6 @@ interface State {
   resetAgents: () => void;
 }
 
-const now = Date.now();
-
-const exampleHistory: HistoryItem[] = [
-  {
-    id: "demo-001",
-    question: "Which bank has the most unresolved complaints?",
-    mode: "B",
-    cost: 1.15,
-    tokens: 18432,
-    latency: 12.3,
-    timestamp: now - 300000,
-    answer: "## Summary\n\nSmart filter narrowed the search space before invoking the analytical model.\n\n### Key findings\n\n- **Wells Fargo** leads with 4,210 unresolved complaints (12% of category).\n- Bank of America and Chase trail by less than 5%.\n- No data quality issues detected in the relevant slice.",
-    modeReason: "Large dataset detected (20,000 rows). Filtering reduces token cost by 92%.",
-    agents: {
-      planner: { status: "done", tokens: 900, cost: 0.05, latency: 0.6 },
-      sqlA: { status: "done", tokens: 4200, cost: 0.32, latency: 1.8 },
-      sqlB: { status: "done", tokens: 5800, cost: 0.41, latency: 2.0 },
-      reducer: { status: "done", tokens: 1900, cost: 0.37, latency: 0.9 },
-    },
-  },
-  {
-    id: "demo-002",
-    question: "Find complaints threatening legal action",
-    mode: "C",
-    cost: 2.3,
-    tokens: 22000,
-    latency: 8.0,
-    timestamp: now - 900000,
-    answer: "## Summary\n\nTwo agents ran in parallel and a reducer merged the partial answers.\n\n### Key findings\n\n- 1,847 complaints reference 'lawyer', 'sue', or 'attorney general'.\n- 64% are mortgage-related disputes.\n- Median resolution time is 38 days.",
-    modeReason: "Speed prioritized — parallelism cuts wall-clock by 60% with modest cost overhead.",
-    agents: {
-      planner: { status: "done", tokens: 1000, cost: 0.08, latency: 0.5 },
-      sqlA: { status: "done", tokens: 6400, cost: 0.78, latency: 2.4 },
-      sqlB: { status: "done", tokens: 6100, cost: 0.74, latency: 2.4 },
-      reducer: { status: "done", tokens: 1800, cost: 0.7, latency: 0.7 },
-    },
-  },
-  {
-    id: "demo-003",
-    question: "Find all fraud complaints filed in 2018",
-    mode: "A",
-    cost: 14.2,
-    tokens: 80000,
-    latency: 45.0,
-    timestamp: now - 1800000,
-    answer: "## Summary\n\nBrute force pass complete. The dataset was scanned end-to-end without filtering.\n\n### Key findings\n\n- 12,447 fraud complaints in 2018.\n- Peak month: August (1,420).\n- Top state: California (18%).",
-    modeReason: "No filterable dimensions — full scan required.",
-    agents: {
-      planner: { status: "done", tokens: 1200, cost: 0.6, latency: 0.8 },
-      sqlA: { status: "done", tokens: 48000, cost: 12.8, latency: 9.0 },
-      sqlB: { status: "idle", tokens: 0, cost: 0, latency: 0 },
-      reducer: { status: "done", tokens: 2200, cost: 0.8, latency: 1.2 },
-    },
-  },
-];
 
 export const useQueryStore = create<State>()(
   persist(
@@ -129,7 +74,7 @@ export const useQueryStore = create<State>()(
       status: "idle",
       answer: "",
       agents: emptyAgents(),
-      history: exampleHistory,
+      history: [],
       modeReason: undefined,
       setQuestion: (q) => set({ question: q }),
       setGoal: (g) => set({ goal: g }),

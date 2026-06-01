@@ -171,11 +171,10 @@ function Dashboard() {
           {isDone && (
             <div className="mt-4 rounded-lg border border-border bg-white p-4">
               <CostRow label="Agent chose"  value={MODE_META[mode].name} />
-              <CostRow label="Model"        value="claude-sonnet" />
+              <CostRow label="Model"        value="DeepSeek-V3.1" />
               <CostRow label="Tokens"       value={totalTokens.toLocaleString()} />
-              <CostRow label="Cost"         value={`$${totalCost.toFixed(2)}`} />
-              <CostRow label="Latency"      value={`${totalLatency.toFixed(1)}s`} />
-              <CostRow label="Rows filtered" value="847 / 20,000" last />
+              <CostRow label="Cost"         value={`$${totalCost.toFixed(4)}`} />
+              <CostRow label="Latency"      value={`${totalLatency.toFixed(1)}s`} last />
             </div>
           )}
 
