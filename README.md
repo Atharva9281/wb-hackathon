@@ -1,6 +1,6 @@
 # QuerySmarter
 
-A multi-agent LLM system that automatically optimises how natural language queries are executed over large datasets — reducing cost by up to **92%** compared to naive approaches.
+A multi-agent LLM system that automatically optimises how natural language queries are executed over large datasets.
 
 Built at the **AGI House Hackathon, May 2026**, powered by [Weights & Biases](https://wandb.ai) inference and Weave tracing.
 
