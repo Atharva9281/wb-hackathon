@@ -4,8 +4,6 @@ A multi-agent LLM system that automatically optimises how natural language queri
 
 Built at the **AGI House Hackathon, May 2026**, powered by [Weights & Biases](https://wandb.ai) inference and Weave tracing.
 
-**Live demo:** https://frontend-eta-weld-4nga4pgida.vercel.app
-
 **Presentation:** https://gamma.app/docs/Stop-Overpaying-for-AI-Queries-dagsxclndmyx57y
 
 ---
