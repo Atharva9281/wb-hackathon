@@ -1,4 +1,4 @@
-# QuerySmarter
+# QueryMind
 
 A multi-agent LLM system that automatically optimises how natural language queries are executed over large datasets.
 
